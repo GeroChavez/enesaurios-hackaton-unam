@@ -8,10 +8,25 @@ Plataforma de análisis táctico que cuantifica el **valor indirecto de los rece
 
 ## Estado del proyecto (leer primero)
 
-- El código está completo en su alcance de MVP, pero **se escribió sin acceso a los datos del evento**: la carpeta `data/` estaba vacía (ni el repositorio ni `plantilla-hackathon.zip` incluyen CSV).
-- **No se ha analizado ninguna jugada real.** La plataforma no muestra resultados simulados: sin CSV en `data/`, la interfaz lo indica.
-- Los nombres de columnas **no están fijados**: `backend/core/schema.py` los reconoce por alias (p. ej. `game_id`/`gameId`, `nfl_id`/`nflId`, `frame_id`/`frameId`). Lo que se detecte de verdad aparece en `GET api/data/status` y en la pantalla de inicio.
-- El entorno donde se desarrolló no podía instalar paquetes, así que **el backend (FastAPI/pandas/numpy), la compilación de Vite y las pruebas no se ejecutaron todavía**. Lo primero al recibir el entorno: `sh .hackathon/setup.sh --check`, `pytest` y `npm run build` (ver «Verificación»).
+- El dataset real (126 CSV, formato Big Data Bowl 2021: 122 archivos de tracking por partido + `games`, `plays`, `players`, `pffScoutingData`) está en `data/raw/data/` en la raíz del repositorio. El backend busca `data/` primero en la raíz del proyecto (`hackathon-unam/`) y, si no existe, en la raíz del repositorio. **Para la entrega con `--entregar`, `data/` debe estar dentro de `hackathon-unam/`** (decisión pendiente del equipo; no se movió ningún CSV).
+- El motor se ajustó al esquema real inspeccionando los archivos (ver «Esquema del dataset»).
+- **El entorno de desarrollo no pudo instalar paquetes**, así que el backend (FastAPI/pandas/numpy), `vite build` y `pytest` **no se han ejecutado**. Lo verificado: la lógica de esquema (`schema.py`) y la inferencia del objetivo (`targets.py`) se ejecutaron con Python estándar sobre los CSV reales; el resto solo pasó revisión de sintaxis. Ver «Verificación».
+
+## Esquema del dataset (verificado con los archivos reales)
+
+| Archivo | Clave | Uso en DECOY IQ |
+|---|---|---|
+| `tracking/tracking_<gameId>.csv` (122) | `gameId, playId, nflId, frameId` | posiciones x,y, `s`, `a`, `dis`, `team`, `playDirection`, `event`; el balón son filas con `nflId` vacío y `team=football` |
+| `plays.csv` | `gameId, playId` | descripción, posesión, `passResult` (C, I, IN, S, R). **No incluye receptor objetivo** |
+| `pffScoutingData.csv` | `gameId, playId, nflId` | `pff_role` (Pass, Pass Route, Pass Block, Pass Rush, Coverage) y alineación |
+| `players.csv` | `nflId` | nombre y posición oficial |
+| `games.csv` | `gameId` | semana, equipos |
+
+Hechos medidos en los datos: cada archivo de tracking tiene un solo partido y las filas de cada jugada son contiguas (permite leer una jugada sin cargar el archivo); `time` solo tiene resolución de segundos, por eso el intervalo entre cuadros se estima con `dis/s` (≈ 0.1 s); los eventos de llegada del pase existen en pocas jugadas (≈ 4 % en la muestra), por eso la zona de referencia usa la trayectoria del balón (ver DVI).
+
+**Receptor objetivo:** se infiere comparando el nombre de la descripción («to C.Godwin», «intended for C.Lamb») con los corredores de ruta (`Pass Route`) de esa jugada; solo se acepta una coincidencia única. En todos los pases C/I/IN del dataset se resuelve ≈ 96 % (7 230 de ≈ 7 565). Es una inferencia, no un campo oficial.
+
+**Viabilidad medida (Python estándar, 21 de 122 partidos, muestra sistemática):** de 1 292 pases, 1 226 (95 %) tienen snap, lanzamiento, objetivo y balón, es decir, DVI calculable. Mediana: 29 cuadros entre snap y lanzamiento, 4 receptores no objetivo y 7 defensores en cobertura por jugada. Sacks, scrambles y pases sin destinatario nombrado quedan sin DVI (se informa el motivo).
 
 ## Problema y propuesta de valor
 
@@ -41,12 +56,12 @@ Python 3.12.12 · FastAPI 0.115.14 · Uvicorn 0.34.3 · Pydantic 2.11.7 · panda
 
 Indicador **experimental** del equipo, de 0 a 100, para receptores que **no** fueron objetivo. No es una probabilidad de éxito, no demuestra causalidad y no es una métrica oficial de la NFL. Detalle completo (fórmulas, unidades, normalización, limitaciones) en `GET api/methodology` y en la pantalla *Análisis DVI*.
 
-Ventana: del snap (o primer cuadro) al lanzamiento. Núcleo de proximidad `K(d) = exp(-d²/(2σ²))`, σ = 3 yd. Para el receptor R y los defensores j, `a_j` es el promedio de `K(d_Rj)` en la ventana.
+Ventana: del snap al lanzamiento (`ball_snap`/`autoevent_ballsnap` a `pass_forward`/`autoevent_passforward`); requiere objetivo y lanzamiento identificados. Núcleo de proximidad `K(d) = exp(-d²/(2σ²))`, σ = 3 yd. Para el receptor R y los defensores j, `a_j` es el promedio de `K(d_Rj)` en la ventana.
 
 | Componente | Qué mide | Unidad | Saturación | Peso |
 |---|---|---|---|---|
 | Proximidad defensiva potencial | defensores-equivalentes cerca de R | def.-equiv. | 1.0 | 0.25 |
-| Arrastre defensivo | alejamiento de la zona de balón de los defensores cercanos a R, menos el movimiento defensivo promedio | yd | 4 | 0.25 |
+| Arrastre defensivo | alejamiento de la zona de balón Z (punto de la trayectoria del balón más cercano al objetivo tras el lanzamiento, o posición en `pass_arrived` si existe) de los defensores cercanos a R, menos el movimiento defensivo promedio | yd | 4 | 0.25 |
 | Espacio para el objetivo | aumento de distancia al objetivo de defensores compartidos con R | yd | 2 | 0.30 |
 | Espacio para otros compañeros | lo mismo, promediado sobre otros receptores | yd | 2 | 0.20 |
 
@@ -59,7 +74,7 @@ Ventana: del snap (o primer cuadro) al lanzamiento. Núcleo de proximidad `K(d) 
 ```sh
 sh .hackathon/setup.sh            # crea .venv e instala dependencias fijadas
 cp .env.example .env              # opcional, solo para Bedrock
-# copiar los CSV del evento a data/
+# los CSV ya están en data/raw/data/ (ver «Estado del proyecto» sobre su ubicación)
 ```
 
 ## Ejecución
@@ -97,10 +112,10 @@ sh .hackathon/setup.sh --check
 
 ## Limitaciones conocidas
 
-- Sin datos reales aún: esquema de columnas y semántica de eventos (`pass_forward`, `ball_snap`, `pass_arrived`) **por validar**.
-- Si no hay columna de tiempo se asume 10 cuadros/s (se informa en la API).
-- Si hay tracking posterior al lanzamiento en otra tabla sin columnas de rol, se trata como continuación y se asume que el último cuadro de la tabla principal es el lanzamiento (se informa).
-- El DVI usa solo el tramo previo al lanzamiento; no modela bloqueos, coberturas asignadas, mirada ni orientación corporal.
-- Receptor objetivo: se toma de la columna de rol o de la tabla de jugadas; si no existe, el DVI no se calcula.
+- Nada de esto se ha ejecutado con pandas/FastAPI/Vite todavía (ver «Estado del proyecto»); el rendimiento con 122 archivos (826 MB) está por medir. Cada partido se indexa solo cuando se consulta.
+- El receptor objetivo es inferido por nombre (≈ 96 % de los pases); puede haber errores de coincidencia que no se han auditado jugada por jugada.
+- La zona Z es una aproximación (no hay evento de llegada en la mayoría de jugadas). Para pases incompletos, el punto de mínima distancia balón–objetivo puede no coincidir con el aterrizaje real.
+- El DVI usa solo el tramo previo al lanzamiento; no modela bloqueos, coberturas asignadas (hay `pff_passCoverage` pero no se usa), mirada ni orientación corporal.
+- El tracking proviene de un solo formato (BDB 2021); otros esquemas se reconocen solo si sus columnas coinciden con los alias de `schema.py`.
 - Pesos y saturaciones del DVI no están calibrados con datos.
 - Sin validación estadística frente a resultados de jugadas.

@@ -112,7 +112,7 @@ export default function Field({ tracking, frameIdx, selected, zone, onSelect, pr
           if (q) pts.push(`${q.x},${fy(q.y)}`)
         }
         if (pts.length < 2) return null
-        const strong = p.class === 'objetivo' || p.class === 'receptor_no_objetivo' || p.id === selected
+        const strong = p.class === 'balon' || p.class === 'objetivo' || p.class === 'receptor_no_objetivo' || p.id === selected
         return (
           <polyline key={`t${p.id}`} points={pts.join(' ')} fill="none" stroke={COLORS[p.class]}
             strokeOpacity={p.id === selected ? 0.95 : strong ? 0.6 : 0.22} strokeWidth={p.id === selected ? 0.38 : 0.2}
@@ -136,11 +136,13 @@ export default function Field({ tracking, frameIdx, selected, zone, onSelect, pr
           <g key={p.id} transform={`translate(${q.x} ${fy(q.y)})`} onClick={() => clickable && onSelect(p.id)} style={{ cursor: clickable ? 'pointer' : 'default' }}>
             <title>{`${p.name ?? p.id} (${p.position ?? '?'}) · x=${q.x.toFixed(1)} y=${q.y.toFixed(1)}`}</title>
             {isSel && <circle r={1.7} fill="none" stroke="#fff" strokeWidth={0.2} />}
-            {p.side === 'defensiva'
+            {p.class === 'balon'
+              ? <ellipse rx={0.7} ry={0.45} fill={COLORS.balon} stroke="#000" strokeOpacity={0.6} strokeWidth={0.1} />
+              : p.side === 'defensiva'
               ? <rect x={-0.8} y={-0.8} width={1.6} height={1.6} fill={COLORS[p.class]} stroke="#000" strokeOpacity={0.5} strokeWidth={0.12} />
               : <circle r={0.95} fill={COLORS[p.class]} stroke="#000" strokeOpacity={0.5} strokeWidth={0.12} />}
             <text y={-1.3} fontSize={1.25} fill="#fff" textAnchor="middle" fontWeight={700} style={{ paintOrder: 'stroke' }} stroke="#000" strokeWidth={0.18}>
-              {p.position ?? p.id}
+              {p.class === 'balon' ? '' : p.position ?? p.id}
             </text>
           </g>
         )

@@ -36,8 +36,8 @@ COMPONENTS: dict[str, dict[str, Any]] = {
         formula="Δ_j = d_jZ(e) - d_jZ(s);  A = sum_j a_j Δ_j / sum_j a_j  -  media_j Δ_j;  c2 = clip(A / 4, 0, 1)",
         measures="Cuánto más se alejaron de la zona de balón Z los defensores cercanos al receptor "
                  "que el defensor promedio (se resta el movimiento defensivo general como control).",
-        limitation="Z es la zona de aterrizaje del balón si existe en los datos; si no, la posición del objetivo "
-                   "al final de la ventana. Es una coincidencia espacial, no prueba que el receptor causara el movimiento.",
+        limitation="Z es la posición del balón en el evento de llegada; si no existe (la mayoría de jugadas), el punto de la "
+                   "trayectoria del balón más cercano al objetivo tras el lanzamiento. Es una coincidencia espacial, no prueba causalidad.",
     ),
     "espacio_objetivo": dict(
         label="Espacio liberado para el receptor objetivo", unit="yd", ref=2.0, weight=0.30,
@@ -63,7 +63,7 @@ def methodology() -> dict[str, Any]:
                   "no demuestra causalidad y no es una métrica oficial de la NFL.",
         "escala": "DVI = 100 · sum_i(w_i c_i) / sum_i(w_i) sobre los componentes calculables. Cada c_i está en [0, 1].",
         "nucleo": {"sigma_yd": SIGMA, "formula": "K(d) = exp(-d² / (2σ²))"},
-        "ventana": "Desde el snap (o primer cuadro) hasta el lanzamiento; si no se conoce, hasta el último cuadro.",
+        "ventana": "Desde el snap (o primer cuadro) hasta el lanzamiento. Solo se calcula en jugadas con receptor objetivo y lanzamiento identificados.",
         "componentes": [{"key": k, **{kk: vv for kk, vv in v.items()}} for k, v in COMPONENTS.items()],
         "pesos": "Pesos fijados por criterio del equipo (no ajustados con datos): el espacio liberado para el objetivo "
                  "pesa más porque es el efecto táctico más directo; proximidad y arrastre son indicios de interacción; "
@@ -97,12 +97,25 @@ def _gain(tr: Tracks, k: int, defs: list[int], a: np.ndarray, s: int, e: int) ->
 
 
 def _zone(tr: Tracks, t_idx: Optional[int], e: int) -> tuple[Optional[tuple[float, float]], str]:
+    """Zona de referencia Z: punto aproximado de llegada del balón (en orden de preferencia)."""
+    b = tr.ball_idx
     if tr.ball_land is not None:
-        return tr.ball_land, "zona de aterrizaje del balón (columna de los datos)"
+        return tr.ball_land, tr.ball_land_source or "columnas de aterrizaje del balón"
+    if b is not None and tr.arrival_idx is not None:
+        x, y = tr.X[tr.arrival_idx, b], tr.Y[tr.arrival_idx, b]
+        if np.isfinite(x) and np.isfinite(y):
+            return (float(x), float(y)), "posición del balón en el evento de llegada del pase"
+    if b is not None and t_idx is not None and tr.throw_idx is not None:
+        d = np.hypot(tr.X[tr.throw_idx:, b] - tr.X[tr.throw_idx:, t_idx], tr.Y[tr.throw_idx:, b] - tr.Y[tr.throw_idx:, t_idx])
+        if np.isfinite(d).any():
+            k = tr.throw_idx + int(np.nanargmin(d))
+            return ((float(tr.X[k, b]), float(tr.Y[k, b])),
+                    f"posición del balón en el cuadro de menor distancia al objetivo tras el lanzamiento "
+                    f"({float(np.nanmin(d)):.1f} yd); aproximación porque no hay evento de llegada")
     if t_idx is not None:
         x, y = tr.X[e, t_idx], tr.Y[e, t_idx]
         if np.isfinite(x) and np.isfinite(y):
-            return (float(x), float(y)), "posición del receptor objetivo al final de la ventana (aproximación)"
+            return (float(x), float(y)), "posición del receptor objetivo al final de la ventana (aproximación débil: sin trayectoria del balón)"
     return None, "no disponible"
 
 
@@ -186,6 +199,10 @@ def compute_dvi(tr: Tracks, players: list[Player]) -> dict[str, Any]:
         "parameters": {"sigma_yd": SIGMA, "min_frames": MIN_FRAMES},
         "target_id": target.id if target else None, "receivers": [], "warnings": [],
     }
+    if target is None or tr.throw_idx is None:
+        result["reason"] = ("No hay receptor objetivo identificado." if target is None else
+                            "No se identificó el lanzamiento (jugada sin pase, sack o scramble).")
+        return result
     if e - s0 + 1 < MIN_FRAMES:
         result["reason"] = "Ventana temporal demasiado corta."
         return result

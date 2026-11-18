@@ -8,6 +8,7 @@ export const COLORS: Record<PlayerClass, string> = {
   ofensiva_otro: '#7C8AA5',
   defensor: '#FF4D5E',
   defensor_presion: '#B8323F',
+  balon: '#C98A4B',
   desconocido: '#556079',
 }
 export const CLASS_LABEL: Record<PlayerClass, string> = {
@@ -17,6 +18,7 @@ export const CLASS_LABEL: Record<PlayerClass, string> = {
   ofensiva_otro: 'Otro ofensivo',
   defensor: 'Defensor',
   defensor_presion: 'Defensor (presión)',
+  balon: 'Balón',
   desconocido: 'Sin clasificar',
 }
 

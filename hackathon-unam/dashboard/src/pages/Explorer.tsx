@@ -9,10 +9,12 @@ export default function Explorer({ onPick }: { onPick: (game: string, play: stri
   const games = useApi<{ items: GameItem[] }>('games')
   const [game, setGame] = useState('')
   const [q, setQ] = useState('')
+  const [res, setRes] = useState('PASS')
   const [offset, setOffset] = useState(0)
   const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) })
   if (game) qs.set('game_id', game)
   if (q.trim()) qs.set('q', q.trim())
+  if (res) qs.set('pass_result', res)
   const plays = useApi<PlayList>(`plays?${qs.toString()}`)
 
   return (
@@ -26,11 +28,25 @@ export default function Explorer({ onPick }: { onPick: (game: string, play: stri
               <option value="">Todos</option>
               {games.data?.items.map((g) => (
                 <option key={g.game_id} value={g.game_id}>
-                  {g.home_team && g.visitor_team ? `${g.visitor_team} @ ${g.home_team} · ` : ''}{g.game_id} ({g.n_plays} jugadas)
+                  {g.home_team && g.visitor_team ? `${g.visitor_team} @ ${g.home_team} · ` : ''}{g.game_id}{g.n_plays ? ` (${g.n_plays} jugadas)` : ''}
                 </option>
               ))}
             </select>
           </label>
+          {plays.data?.filtro_resultado_disponible && (
+            <label className="text-xs text-slate-400">Resultado
+              <select value={res} onChange={(e) => { setRes(e.target.value); setOffset(0) }}
+                className="mt-1 block rounded-md border border-white/10 bg-[#0b1220] px-3 py-2 text-sm text-white">
+                <option value="PASS">Pases (C, I, IN)</option>
+                <option value="C">Completos</option>
+                <option value="I">Incompletos</option>
+                <option value="IN">Intercepciones</option>
+                <option value="S">Sacks</option>
+                <option value="R">Scrambles</option>
+                <option value="">Todas</option>
+              </select>
+            </label>
+          )}
           {plays.data?.descripciones_disponibles && (
             <label className="text-xs text-slate-400">Buscar en la descripción
               <input value={q} onChange={(e) => { setQ(e.target.value); setOffset(0) }} placeholder="p. ej. incomplete"

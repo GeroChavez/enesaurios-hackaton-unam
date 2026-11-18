@@ -7,11 +7,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-THROW_EVENTS = {"pass_forward", "pass_shovel"}
-ARRIVAL_EVENTS = {"pass_arrived", "pass_outcome_caught", "pass_outcome_incomplete",
+THROW_EVENTS = {"pass_forward", "autoevent_passforward", "pass_shovel"}
+ARRIVAL_EVENTS = {"pass_arrived", "pass_outcome_caught", "pass_outcome_incomplete", "dropped_pass", "pass_outcome_caught", "pass_outcome_incomplete",
                   "pass_outcome_interception", "pass_outcome_touchdown"}
-SNAP_EVENTS = {"ball_snap"}
+SNAP_EVENTS = {"ball_snap", "autoevent_ballsnap"}
 DEFAULT_DT = 0.1
+BALL_ID = "ball"
 
 
 @dataclass
@@ -28,6 +29,8 @@ class Tracks:
     throw_source: Optional[str]
     arrival_idx: Optional[int]
     ball_land: Optional[tuple[float, float]]
+    ball_idx: Optional[int] = None
+    ball_land_source: Optional[str] = None
 
     def col(self, pid: str) -> int:
         return self.ids.index(pid)
@@ -49,15 +52,20 @@ def build_tracks(df: pd.DataFrame) -> Tracks:
     Y = df.pivot(index="frame", columns="player", values="y").reindex(frames)
     ids = [str(c) for c in X.columns]
 
-    dt, src = DEFAULT_DT, "supuesto: 10 cuadros por segundo (no hay columna de tiempo)"
-    if "time" in df and df["time"].notna().any():
+    dt, src = DEFAULT_DT, "supuesto: 10 cuadros por segundo (no se pudo estimar)"
+    if {"dis", "s"} <= set(df.columns):
+        # distancia recorrida por cuadro / velocidad = intervalo entre cuadros
+        m = df[(df["s"] > 1.0) & (df["dis"] > 0)]
+        if len(m) >= 20:
+            est = float((m["dis"] / m["s"]).median())
+            if 0.05 <= est <= 0.2:
+                dt, src = est, "estimado de dis/s"
+    elif "time" in df and df["time"].notna().any() and len(frames) > 1:
         try:
-            tt = pd.to_datetime(df.drop_duplicates("frame").set_index("frame")["time"], errors="coerce").reindex(frames)
-            secs = tt.diff().dt.total_seconds().to_numpy()[1:]
-            fd = np.diff(frames)
-            ok = np.isfinite(secs) & (fd > 0)
-            if ok.sum() >= 3:
-                dt, src = float(np.median(secs[ok] / fd[ok])), "columna de tiempo"
+            tt = pd.to_datetime(df["time"], errors="coerce", utc=True).dropna()
+            est = (tt.max() - tt.min()).total_seconds() / float(frames[-1] - frames[0])
+            if 0.05 <= est <= 0.2:
+                dt, src = est, "columna de tiempo (intervalo medio)"
         except Exception:
             pass
     t = (frames - frames[0]) * dt
@@ -77,4 +85,6 @@ def build_tracks(df: pd.DataFrame) -> Tracks:
         if len(lx) and len(ly):
             land = (float(lx.iloc[0]), float(ly.iloc[0]))
     return Tracks(frames, ids, X.to_numpy(float), Y.to_numpy(float), t, dt, src,
-                  snap if snap is not None else 0, throw, tsrc, arrival, land)
+                  snap if snap is not None else 0, throw, tsrc, arrival, land,
+                  ids.index(BALL_ID) if BALL_ID in ids else None,
+                  "columnas ball_land de los datos" if land else None)

@@ -37,8 +37,9 @@ def games():
 
 @router.get("/plays")
 def plays(game_id: Optional[str] = Query(None, pattern=ID), q: Optional[str] = Query(None, max_length=100),
+          pass_result: Optional[str] = Query(None, pattern=r"^[A-Za-z]{1,4}$", description="C, I, IN, S, R o PASS (C+I+IN)"),
           limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
-    return get_store().plays(game_id, q, limit, offset)
+    return get_store().plays(game_id, q, limit, offset, pass_result)
 
 
 @router.get("/plays/{game_id}/{play_id}")

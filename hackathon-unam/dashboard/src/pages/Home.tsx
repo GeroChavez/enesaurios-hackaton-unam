@@ -37,15 +37,16 @@ export default function Home({ go }: { go: (p: 'explorer') => void }) {
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <Stat label="Partidos" value={data.n_games} />
-                <Stat label="Jugadas" value={data.n_plays_with_tracking} />
-                <Stat label="Filas tracking" value={data.tracking_rows.toLocaleString('es-MX')} />
+                <Stat label="Jugadas" value={data.n_plays ?? '—'} hint={data.n_pass_plays != null ? `${data.n_pass_plays} con pase` : undefined} />
+                <Stat label="Filas tracking" value={data.tracking_rows.toLocaleString('es-MX')} hint={`${data.n_tracking_files} archivos`} />
               </div>
               {data.notes.map((n) => <Notice key={n} kind={data.has_data ? 'info' : 'warn'}>{n}</Notice>)}
               {data.files.length > 0 && (
-                <ul className="space-y-1 text-xs text-slate-400">
-                  {data.files.map((f) => (
+                <ul className="max-h-40 space-y-1 overflow-auto text-xs text-slate-400">
+                  {data.files.filter((f) => f.tipo !== 'tracking').map((f) => (
                     <li key={f.archivo}><span className="font-mono text-slate-200">{f.archivo}</span> · {f.tipo} · {f.filas.toLocaleString('es-MX')} filas</li>
                   ))}
+                  <li>+ {data.n_tracking_files} archivos de tracking por partido (carpeta {data.data_dir})</li>
                 </ul>
               )}
             </div>

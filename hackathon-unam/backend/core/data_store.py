@@ -23,7 +23,7 @@ from .schema import DESCRIPTIVE, classify, resolve
 CHUNK = 500_000
 TRACK_COLS = ["game", "play", "player", "frame", "x", "y", "s", "a", "o", "dir", "name",
               "position", "side", "role", "club", "event", "time", "play_direction",
-              "ball_land_x", "ball_land_y"]
+              "ball_land_x", "ball_land_y", "dis"]
 
 
 def idstr(s: pd.Series) -> pd.Series:
@@ -80,6 +80,8 @@ class CsvFile:
     index_map: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
     contiguous: bool = True
     quality: dict[str, Any] = field(default_factory=dict)
+    games_hint: set[str] = field(default_factory=set)   # partidos vistos en las primeras filas
+    indexed: bool = False
 
 
 @dataclass
@@ -102,6 +104,7 @@ class DataStore:
         self._plays: Optional[pd.DataFrame] = None
         self._games: Optional[pd.DataFrame] = None
         self._players: Optional[pd.DataFrame] = None
+        self._pp: Optional[pd.DataFrame] = None
         self._plays_map: dict[str, str] = {}
         self._games_map: dict[str, str] = {}
         self._cache: dict[tuple[str, str], PlayData] = {}
@@ -120,10 +123,11 @@ class DataStore:
                     except Exception:  # archivo ilegible o vacío
                         continue
                     mapping = resolve(head.columns)
+                    hint = set(idstr(head[mapping["game"]]).unique()) if "game" in mapping else set()
                     self.files.append(CsvFile(
                         path=p, rel=str(p.relative_to(self.data_dir.parent)), columns=list(head.columns),
                         mapping=mapping, kind=classify(mapping), rows=_count_rows(p),
-                        dtypes={c: str(t) for c, t in head.dtypes.items()}))
+                        dtypes={c: str(t) for c, t in head.dtypes.items()}, games_hint=hint))
                 tracking = [f for f in self.files if f.kind == "tracking"]
                 for f in tracking:
                     f.primary = bool(DESCRIPTIVE & set(f.mapping)) or not any(
@@ -140,13 +144,21 @@ class DataStore:
         return next((f for f in self.files if f.kind == kind), None)
 
     # ---------------------------------------------------------------- índice
-    def ensure_index(self) -> None:
+    def ensure_file_index(self, f: CsvFile) -> None:
         with self._lock:
-            if self._indexed:
-                return
-            for f in self.tracking_files:
+            if not f.indexed:
                 self._index_file(f)
-            self._indexed = True
+                f.indexed = True
+
+    def _files_for(self, game: str) -> list[CsvFile]:
+        """Archivos de tracking que contienen el partido (usa pistas; si no hay, indexa todo)."""
+        with self._lock:
+            hit = [f for f in self.tracking_files if game in f.games_hint]
+            if hit:
+                return hit
+            for f in self.tracking_files:
+                self.ensure_file_index(f)
+            return [f for f in self.tracking_files if any(g == game for g, _ in f.index_map)]
 
     def _index_file(self, f: CsvFile) -> None:
         m = f.mapping
@@ -208,25 +220,36 @@ class DataStore:
                 self._players, _ = self._aux("players")
             return self._players
 
+    def player_play_table(self) -> Optional[pd.DataFrame]:
+        with self._lock:
+            if self._pp is None:
+                self._pp, _ = self._aux("player_play")
+            return self._pp
+
     # ------------------------------------------------------------- consultas
     def status(self) -> dict[str, Any]:
         self.scan()
         track = self.tracking_files
-        if track:
-            self.ensure_index()
-        plays = {k for f in track for k in f.index_map}
+        gt, pt = self.games_table(), self.plays_table()
+        hint_games = {g for f in track for g in f.games_hint}
+        n_pass = None
+        if pt is not None and "pass_result" in pt:
+            n_pass = int(pt["pass_result"].isin(["C", "I", "IN"]).sum())
         return {
-            "data_dir": "data/",
+            "data_dir": str(self.data_dir.relative_to(self.data_dir.parent)) if self.data_dir.is_dir() else "data",
             "data_dir_exists": self.data_dir.is_dir(),
             "has_data": bool(track),
+            "n_csv_files": len(self.files),
+            "n_tracking_files": len(track),
             "files": [{
                 "archivo": f.rel, "tipo": f.kind, "filas": f.rows, "columnas": f.columns,
                 "columnas_reconocidas": f.mapping, "tracking_principal": f.primary if f.kind == "tracking" else None,
-                "calidad": f.quality or None,
-                "contiguo_por_jugada": f.contiguous if f.kind == "tracking" else None,
+                "calidad": f.quality or None, "indexado": f.indexed if f.kind == "tracking" else None,
+                "contiguo_por_jugada": f.contiguous if f.indexed else None,
             } for f in self.files],
-            "n_games": len({g for g, _ in plays}),
-            "n_plays_with_tracking": len(plays),
+            "n_games": len(gt) if gt is not None else len(hint_games),
+            "n_plays": len(pt) if pt is not None else None,
+            "n_pass_plays": n_pass,
             "tracking_rows": sum(f.rows for f in track),
             "notes": self._notes(track),
         }
@@ -237,50 +260,49 @@ class DataStore:
             notes.append("No hay CSV en data/. La plataforma está lista para recibirlos; no se muestran resultados simulados.")
         elif not track:
             notes.append("Hay CSV pero ninguno tiene game, play, jugador, frame, x e y: no se puede reconstruir tracking.")
-        for f in track:
-            if not DESCRIPTIVE & set(f.mapping):
-                notes.append(f"{f.rel}: sin columnas de lado/rol/posición; se trata como continuación si existe otra tabla de tracking con esa información.")
+        if track and self.player_play_table() is None:
+            notes.append("No hay tabla de roles por jugada (p. ej. pffScoutingData): los roles se infieren por posición, con menor fiabilidad.")
         return notes
 
     def games(self) -> list[dict[str, Any]]:
         self.scan()
         if not self.tracking_files:
             return []
-        self.ensure_index()
-        counts: dict[str, int] = {}
-        for f in self.tracking_files:
-            for (g, _p) in f.index_map:
-                counts[g] = counts.get(g, 0)
-        keys = {k for f in self.tracking_files for k in f.index_map}
-        for g, _ in keys:
-            counts[g] += 1
-        gt = self.games_table()
+        have = {g for f in self.tracking_files for g in f.games_hint}
+        gt, pt = self.games_table(), self.plays_table()
+        counts = pt.groupby("game").size().to_dict() if pt is not None else {}
         extra: dict[str, dict] = {}
-        if gt is not None and "game" in gt:
+        if gt is not None:
             for r in gt.to_dict("records"):
-                extra[str(r["game"])] = {k: to_py(r.get(k)) for k in
-                                         ("week", "game_date", "home_team", "visitor_team") if k in r}
-        out = [{"game_id": g, "n_plays": n, **extra.get(g, {})} for g, n in counts.items()]
+                extra[str(r["game"])] = {k: to_py(r.get(k)) for k in ("week", "game_date", "home_team", "visitor_team") if k in r}
+        out = [{"game_id": g, "n_plays": int(counts.get(g, 0)) or None, **extra.get(g, {})} for g in have]
         return sorted(out, key=lambda d: d["game_id"])
 
-    def plays(self, game: Optional[str], q: Optional[str], limit: int, offset: int) -> dict[str, Any]:
+    def _all_keys(self) -> list[tuple[str, str]]:
+        keys: set[tuple[str, str]] = set()
+        for f in self.tracking_files:
+            self.ensure_file_index(f)
+            keys |= set(f.index_map)
+        return sorted(keys)
+
+    def plays(self, game: Optional[str], q: Optional[str], limit: int, offset: int,
+              pass_result: Optional[str] = None) -> dict[str, Any]:
         self.scan()
-        keys = sorted({k for f in self.tracking_files for k in f.index_map}) if self.tracking_files else []
-        if self.tracking_files:
-            self.ensure_index()
-            keys = sorted({k for f in self.tracking_files for k in f.index_map})
-        base = pd.DataFrame(keys, columns=["game", "play"])
-        base["has_tracking"] = True
+        have = {g for f in self.tracking_files for g in f.games_hint}
         pt = self.plays_table()
         if pt is not None:
-            cols = [c for c in ("game", "play", "description", "quarter", "down", "yards_to_go",
-                                "possession", "defensive_team", "pass_result", "game_clock", "target")
-                    if c in pt.columns]
-            sub = pt[cols].drop_duplicates(["game", "play"])
-            base = base.merge(sub, on=["game", "play"], how="outer")
-            base["has_tracking"] = base["has_tracking"].fillna(False).astype(bool)
+            cols = [c for c in ("game", "play", "description", "quarter", "down", "yards_to_go", "possession",
+                                "defensive_team", "pass_result", "game_clock", "target") if c in pt.columns]
+            base = pt[cols].drop_duplicates(["game", "play"]).copy()
+            base["has_tracking"] = base["game"].isin(have)
+        else:
+            base = pd.DataFrame(self._all_keys(), columns=["game", "play"])
+            base["has_tracking"] = True
         if game:
             base = base[base["game"] == game]
+        if pass_result and "pass_result" in base:
+            codes = ["C", "I", "IN"] if pass_result.upper() == "PASS" else [pass_result.upper()]
+            base = base[base["pass_result"].isin(codes)]
         if q and "description" in base:
             base = base[base["description"].astype(str).str.contains(q, case=False, regex=False, na=False)]
         base = base.sort_values(["game", "play"])
@@ -289,7 +311,8 @@ class DataStore:
         items = [{("game_id" if k == "game" else "play_id" if k == "play" else k): to_py(v)
                   for k, v in r.items()} for r in page.to_dict("records")]
         return {"total": total, "limit": limit, "offset": offset, "items": items,
-                "descripciones_disponibles": pt is not None}
+                "descripciones_disponibles": pt is not None,
+                "filtro_resultado_disponible": pt is not None and "pass_result" in pt.columns}
 
     # ------------------------------------------------------------ una jugada
     def _read_rows(self, f: CsvFile, game: str, play: str) -> Optional[pd.DataFrame]:
@@ -327,18 +350,20 @@ class DataStore:
             if key in self._cache:
                 return self._cache[key]
         self.scan()
-        self.ensure_index()
         primary_parts, cont_parts = [], []
-        for f in self.tracking_files:
+        files = self._files_for(game)
+        for f in files:
+            self.ensure_file_index(f)
             part = self._read_rows(f, game, play)
             if part is not None and len(part):
                 (primary_parts if f.primary else cont_parts).append(part)
         if not primary_parts and not cont_parts:
             return None
-        meta: dict[str, Any] = {"archivos_tracking": [f.rel for f in self.tracking_files if (game, play) in f.index_map]}
+        meta: dict[str, Any] = {"archivos_tracking": [f.rel for f in files if (game, play) in f.index_map]}
         df = self._build_canonical(primary_parts, cont_parts, meta)
         info, ginfo, target = self._lookup_info(game, play)
         df = self._orient(df, info, meta)
+        df = self._attach_pff(df, game, play, meta)
         df = self._attach_players(df)
         pd_ = PlayData(game, play, df, info, ginfo, target, meta)
         with self._lock:
@@ -349,7 +374,7 @@ class DataStore:
 
     @staticmethod
     def _numeric(df: pd.DataFrame) -> pd.DataFrame:
-        for c in ("frame", "x", "y", "s", "a", "o", "dir", "ball_land_x", "ball_land_y"):
+        for c in ("frame", "x", "y", "s", "a", "o", "dir", "dis", "ball_land_x", "ball_land_y"):
             if c in df:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         return df
@@ -357,10 +382,14 @@ class DataStore:
     def _build_canonical(self, prim: list[pd.DataFrame], cont: list[pd.DataFrame], meta: dict) -> pd.DataFrame:
         def clean(d: pd.DataFrame) -> pd.DataFrame:
             d = self._numeric(d.reset_index(drop=True))
+            pl = idstr(d["player"]).reindex(d.index)
+            if "club" in d:  # filas del balón: nflId vacío y equipo 'football'
+                is_ball = d["player"].isna() & (d["club"].astype(str).str.lower() == "football")
+                pl[is_ball] = "ball"
+            d["player"] = pl
             no_player = int(d["player"].isna().sum())
             meta["filas_sin_jugador_descartadas"] = meta.get("filas_sin_jugador_descartadas", 0) + no_player
             d = d.dropna(subset=["player", "frame", "x", "y"])
-            d["player"] = idstr(d["player"]).reindex(d.index)
             return d.drop_duplicates(["player", "frame"], keep="first")
 
         base = clean(pd.concat(prim, ignore_index=True)) if prim else None
@@ -423,6 +452,21 @@ class DataStore:
                 if c in df:
                     df[c] = (df[c] + 180.0) % 360.0
         meta["orientacion_normalizada"] = direction in ("left", "right")
+        return df
+
+    def _attach_pff(self, df: pd.DataFrame, game: str, play: str, meta: dict) -> pd.DataFrame:
+        """Une rol y alineación por jugador y jugada (p. ej. pffScoutingData)."""
+        pp = self.player_play_table()
+        if pp is None:
+            return df
+        sub = pp[(pp["game"] == game) & (pp["play"] == play)]
+        cols = [c for c in ("role", "alignment") if c in sub.columns]
+        if sub.empty or not cols:
+            meta["roles_por_jugada"] = False
+            return df
+        sub = sub[["player"] + cols].drop_duplicates("player")
+        df = df.drop(columns=[c for c in cols if c in df]).merge(sub, on="player", how="left")
+        meta["roles_por_jugada"] = True
         return df
 
     def _attach_players(self, df: pd.DataFrame) -> pd.DataFrame:

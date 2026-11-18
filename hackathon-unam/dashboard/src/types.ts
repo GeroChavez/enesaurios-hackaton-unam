@@ -5,24 +5,29 @@ export interface DataFile {
   columnas: string[]
   columnas_reconocidas: Record<string, string>
   calidad: Record<string, number> | null
+  indexado: boolean | null
 }
 export interface DataStatus {
   has_data: boolean
   n_games: number
-  n_plays_with_tracking: number
+  n_plays: number | null
+  n_pass_plays: number | null
+  n_csv_files: number
+  n_tracking_files: number
+  data_dir: string
   tracking_rows: number
   files: DataFile[]
   notes: string[]
 }
-export interface GameItem { game_id: string; n_plays: number; week?: number | null; game_date?: string | null; home_team?: string | null; visitor_team?: string | null }
+export interface GameItem { game_id: string; n_plays: number | null; week?: number | null; game_date?: string | null; home_team?: string | null; visitor_team?: string | null }
 export interface PlayItem {
   game_id: string; play_id: string; has_tracking: boolean
   description?: string | null; quarter?: number | null; down?: number | null; yards_to_go?: number | null
   possession?: string | null; defensive_team?: string | null; pass_result?: string | null; game_clock?: string | null
 }
-export interface PlayList { total: number; limit: number; offset: number; items: PlayItem[]; descripciones_disponibles: boolean }
+export interface PlayList { total: number; limit: number; offset: number; items: PlayItem[]; descripciones_disponibles: boolean; filtro_resultado_disponible: boolean }
 
-export type PlayerClass = 'objetivo' | 'pasador' | 'receptor_no_objetivo' | 'ofensiva_otro' | 'defensor' | 'defensor_presion' | 'desconocido'
+export type PlayerClass = 'objetivo' | 'pasador' | 'receptor_no_objetivo' | 'ofensiva_otro' | 'defensor' | 'defensor_presion' | 'balon' | 'desconocido'
 export interface PlayerInfo { id: string; name: string | null; position: string | null; side: string; role_raw: string | null; cls: PlayerClass; basis: string }
 export interface Events {
   start_frame: number; throw_frame: number | null; throw_source: string | null
