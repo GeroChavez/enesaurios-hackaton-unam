@@ -54,11 +54,12 @@ export interface DviReceiver {
 }
 export interface Dvi {
   available: boolean; reason: string | null; target_id: string | null; receivers: DviReceiver[]; warnings: string[]
-  window: { start_frame: number; end_frame: number; throw_frame: number | null; throw_source: string | null; dt_s: number; dt_source: string; arrival_frame: number | null }
+  window: { start_frame: number; end_frame: number; throw_frame: number | null; throw_source: string | null; dt_s: number; dt_source: string; arrival_frame: number | null; start_source?: string }
   zone?: { x: number; y: number } | null; zone_source?: string; notes?: string[]
+  target_inferred?: boolean; target_basis?: string; local_summary?: string | null
 }
 export interface Methodology {
-  nombre: string; estado: string; escala: string; ventana: string; pesos: string; doble_conteo: string; no_calculable: string; solo_no_objetivo: string
+  nombre: string; estado: string; calibracion: string; observado_vs_inferido: string; escala: string; ventana: string; pesos: string; doble_conteo: string; no_calculable: string; solo_no_objetivo: string
   nucleo: { sigma_yd: number; formula: string }
   componentes: { key: string; label: string; unit: string; formula: string; measures: string; limitation: string; weight: number; ref: number }[]
 }

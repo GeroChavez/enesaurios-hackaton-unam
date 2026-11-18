@@ -12,6 +12,7 @@ from ..analytics.graph import DynamicGraph
 from ..analytics.roles import Player, classify_players
 from ..analytics.tracks import Tracks, build_tracks
 from ..core.data_store import PlayData, get_store
+from .summary import local_summary
 
 
 class PlayNotFound(Exception):
@@ -110,6 +111,8 @@ def dvi(game: str, play: str) -> dict[str, Any]:
         res = compute_dvi(c.tracks, c.players)
         res["game_id"], res["play_id"], res["notes"] = game, play, c.notes
         res["methodology_ref"] = "api/methodology"
+        tgt = next((p.name for p in c.players if p.id == res.get("target_id")), None)
+        res["local_summary"] = local_summary(res, tgt)
         c._dvi = _clean(res)
     return c._dvi
 

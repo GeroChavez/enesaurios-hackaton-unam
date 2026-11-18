@@ -7,10 +7,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-THROW_EVENTS = {"pass_forward", "autoevent_passforward", "pass_shovel"}
-ARRIVAL_EVENTS = {"pass_arrived", "pass_outcome_caught", "pass_outcome_incomplete", "dropped_pass", "pass_outcome_caught", "pass_outcome_incomplete",
-                  "pass_outcome_interception", "pass_outcome_touchdown"}
-SNAP_EVENTS = {"ball_snap", "autoevent_ballsnap"}
+from .events import ARRIVAL_EVENTS, SNAP_EVENTS, THROW_EVENTS
+
 DEFAULT_DT = 0.1
 BALL_ID = "ball"
 
@@ -30,6 +28,7 @@ class Tracks:
     arrival_idx: Optional[int]
     ball_land: Optional[tuple[float, float]]
     ball_idx: Optional[int] = None
+    start_source: str = "evento de snap"
     ball_land_source: Optional[str] = None
 
     def col(self, pid: str) -> int:
@@ -87,4 +86,5 @@ def build_tracks(df: pd.DataFrame) -> Tracks:
     return Tracks(frames, ids, X.to_numpy(float), Y.to_numpy(float), t, dt, src,
                   snap if snap is not None else 0, throw, tsrc, arrival, land,
                   ids.index(BALL_ID) if BALL_ID in ids else None,
-                  "columnas ball_land de los datos" if land else None)
+                  "columnas ball_land de los datos" if land else None,
+                  "evento de snap" if snap is not None else "primer cuadro (no hay evento de snap)")

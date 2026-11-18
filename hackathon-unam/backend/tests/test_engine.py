@@ -80,17 +80,54 @@ def test_defender_pulled_away_gives_positive_components(tmp_path):
     comp = {c["key"]: c for c in r["components"]}
     assert comp["pdp"]["raw"] > 0.5
     assert comp["espacio_objetivo"]["raw"] > 1.0
-    assert comp["arrastre"]["raw"] > 0
     assert 0 < r["dvi"] <= 100
+    assert res["target_inferred"] is True               # el objetivo sale de la descripción, no de un dato oficial
 
 
 def test_static_defense_gives_zero_space_and_is_reproducible(tmp_path):
     _, _, a = compute(tmp_path, False)
     _, _, b = compute(tmp_path, False)
     comp = {c["key"]: c for c in a["receivers"][0]["components"]}
-    assert comp["arrastre"]["raw"] == pytest.approx(0.0, abs=1e-9)
     assert comp["espacio_objetivo"]["raw"] == pytest.approx(0.0, abs=1e-9)
+    assert comp["arrastre"]["raw"] is None or comp["arrastre"]["raw"] == pytest.approx(0.0, abs=1e-9)
     assert a["receivers"][0]["dvi"] == b["receivers"][0]["dvi"]
+
+
+def _unavailable(tmp_path, mutate):
+    d = tmp_path / "data"
+    write_dataset(d, True)
+    mutate(d)
+    store = DataStore(d)
+    pdata = store.load_play("1", "7")
+    players, _ = classify_players(pdata.df, pdata.target_id, pdata.info)
+    return compute_dvi(build_tracks(pdata.df), players)
+
+
+def test_play_without_throw_is_not_computable(tmp_path):
+    def m(d):
+        df = pd.read_csv(d / "tracking_1.csv")
+        df["event"] = df["event"].replace({"pass_forward": "None"})
+        df.to_csv(d / "tracking_1.csv", index=False)
+    res = _unavailable(tmp_path, m)
+    assert res["available"] is False and "lanzamiento" in res["reason"]
+
+
+def test_play_without_identifiable_target_is_not_computable(tmp_path):
+    def m(d):
+        p = pd.read_csv(d / "plays.csv")
+        p["playDescription"] = "(10:00) (Shotgun) Q.Back pass incomplete deep left."
+        p.to_csv(d / "plays.csv", index=False)
+    res = _unavailable(tmp_path, m)
+    assert res["available"] is False and "objetivo" in res["reason"]
+
+
+def test_play_without_snap_is_not_computable(tmp_path):
+    def m(d):
+        df = pd.read_csv(d / "tracking_1.csv")
+        df["event"] = df["event"].replace({"ball_snap": "None"})
+        df.to_csv(d / "tracking_1.csv", index=False)
+    res = _unavailable(tmp_path, m)
+    assert res["available"] is False and "snap" in res["reason"]
 
 
 def test_no_data_directory_is_handled(tmp_path):

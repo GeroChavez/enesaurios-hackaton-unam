@@ -34,6 +34,7 @@ export default function Tactical({ detail, tracking, dvi, selected, setSelected 
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-black text-white">Visualización táctica</h2>
+      {dvi?.target_inferred && <Notice kind="info">El receptor objetivo (dorado) es una <strong>inferencia</strong>: se dedujo comparando el nombre de la descripción de la jugada con los corredores de ruta. No es un dato oficial.</Notice>}
       {!tracking.orientation_normalized && <Notice kind="warn">No se conoce la dirección de la jugada: las coordenadas se muestran tal como vienen en los datos (sin normalizar).</Notice>}
       <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
         <Card>

@@ -21,6 +21,7 @@ from .tracks import Tracks
 
 SIGMA = 3.0
 MIN_FRAMES = 5
+MIN_RECEIVER_DISP = 2.0   # yd: desplazamiento neto mínimo para definir la dirección de la ruta
 
 # clave: (etiqueta, unidad, referencia de saturación, peso)
 COMPONENTS: dict[str, dict[str, Any]] = {
@@ -32,12 +33,13 @@ COMPONENTS: dict[str, dict[str, Any]] = {
         limitation="Proximidad no es atención visual: no hay datos de mirada ni de asignación de cobertura.",
     ),
     "arrastre": dict(
-        label="Arrastre defensivo respecto a la zona de balón", unit="yd", ref=4.0, weight=0.25,
-        formula="Δ_j = d_jZ(e) - d_jZ(s);  A = sum_j a_j Δ_j / sum_j a_j  -  media_j Δ_j;  c2 = clip(A / 4, 0, 1)",
-        measures="Cuánto más se alejaron de la zona de balón Z los defensores cercanos al receptor "
-                 "que el defensor promedio (se resta el movimiento defensivo general como control).",
-        limitation="Z es la posición del balón en el evento de llegada; si no existe (la mayoría de jugadas), el punto de la "
-                   "trayectoria del balón más cercano al objetivo tras el lanzamiento. Es una coincidencia espacial, no prueba causalidad.",
+        label="Arrastre defensivo (seguimiento)", unit="yd", ref=4.0, weight=0.25,
+        formula="u = (P_R(e) - P_R(s)) / ||P_R(e) - P_R(s)||;  p_j = (P_j(e) - P_j(s)) · u;  "
+                "A = sum_j a_j p_j / sum_j a_j  -  media_j p_j;  c2 = clip(A / 4, 0, 1)",
+        measures="Cuánto más se desplazaron los defensores cercanos al receptor en la dirección de la ruta del receptor "
+                 "que el defensor promedio (control del movimiento defensivo general). Requiere que R se desplace ≥ 2 yd.",
+        limitation="No usa al objetivo ni al balón (evita solaparse con el espacio para el objetivo). Mide coincidencia de "
+                   "movimiento: un defensor que baja por su cobertura asignada también aparece como «seguimiento».",
     ),
     "espacio_objetivo": dict(
         label="Espacio liberado para el receptor objetivo", unit="yd", ref=2.0, weight=0.30,
@@ -63,15 +65,21 @@ def methodology() -> dict[str, Any]:
                   "no demuestra causalidad y no es una métrica oficial de la NFL.",
         "escala": "DVI = 100 · sum_i(w_i c_i) / sum_i(w_i) sobre los componentes calculables. Cada c_i está en [0, 1].",
         "nucleo": {"sigma_yd": SIGMA, "formula": "K(d) = exp(-d² / (2σ²))"},
-        "ventana": "Desde el snap (o primer cuadro) hasta el lanzamiento. Solo se calcula en jugadas con receptor objetivo y lanzamiento identificados.",
+        "calibracion": "NINGÚN parámetro está calibrado con datos: σ, los pesos, las saturaciones y el desplazamiento mínimo son "
+                       "decisiones del equipo, fijadas a priori para que la escala sea comparable entre jugadas. No se ha "
+                       "validado el DVI contra resultados de jugadas ni contra expertos.",
+        "observado_vs_inferido": "Observado: posiciones, eventos, roles PFF. Inferido: el receptor objetivo (nombre en la descripción). "
+                                 "El DVI depende del objetivo en el componente de espacio para el objetivo y en la lista de beneficiarios.",
+        "ventana": "Desde el snap hasta el lanzamiento. Solo se calcula con snap, lanzamiento y receptor objetivo identificados; si falta alguno, la jugada es «no calculable» y se informa el motivo.",
         "componentes": [{"key": k, **{kk: vv for kk, vv in v.items()}} for k, v in COMPONENTS.items()],
         "pesos": "Pesos fijados por criterio del equipo (no ajustados con datos): el espacio liberado para el objetivo "
                  "pesa más porque es el efecto táctico más directo; proximidad y arrastre son indicios de interacción; "
                  "el espacio para otros compañeros es secundario. Las saturaciones (ref) son referencias fijas para "
                  "que la escala sea comparable entre jugadas, no percentiles de la liga.",
-        "doble_conteo": "PDP mide proximidad R-defensor; Arrastre mide movimiento relativo a la zona de balón; los dos "
-                        "componentes de espacio miden beneficiarios distintos (objetivo / compañeros). Arrastre y espacio "
-                        "al objetivo pueden correlacionar porque ambos dependen del movimiento defensivo.",
+        "doble_conteo": "PDP usa solo distancias R-defensor; Arrastre usa la proyección del desplazamiento defensivo sobre la ruta de R "
+                        "(sin objetivo ni balón); los componentes de espacio miden la distancia defensor-beneficiario para "
+                        "beneficiarios disjuntos (objetivo / otros). Persiste una correlación esperable porque los cuatro dependen "
+                        "de las posiciones de los mismos defensores y a_j se reutiliza como peso; no se ha cuantificado.",
         "no_calculable": "Si un componente no se puede calcular, se excluye y los pesos restantes se renormalizan; "
                          "se reporta la cobertura de pesos utilizada.",
         "solo_no_objetivo": "El DVI se calcula para receptores que no fueron objetivo del pase.",
@@ -120,7 +128,7 @@ def _zone(tr: Tracks, t_idx: Optional[int], e: int) -> tuple[Optional[tuple[floa
 
 
 def _components_at(tr: Tracks, r: int, t_idx: Optional[int], defs: list[int], others: list[int],
-                   s: int, e: int, zone: Optional[tuple[float, float]]) -> dict[str, dict]:
+                   s: int, e: int) -> dict[str, dict]:
     out: dict[str, dict] = {}
     dRD = dist_to(tr, r, defs)[s:e + 1]
     Kd = _K(dRD)
@@ -135,21 +143,23 @@ def _components_at(tr: Tracks, r: int, t_idx: Optional[int], defs: list[int], ot
     else:
         out["pdp"] = {"raw": None, "norm": None, "note": "Datos insuficientes de defensores cercanos."}
 
-    # arrastre
-    if zone is not None and len(defs) >= 2:
-        dj0 = np.hypot(tr.X[s, defs] - zone[0], tr.Y[s, defs] - zone[1])
-        dj1 = np.hypot(tr.X[e, defs] - zone[0], tr.Y[e, defs] - zone[1])
-        delta = dj1 - dj0
-        ok = np.isfinite(delta)
+    # arrastre / seguimiento: proyección del desplazamiento defensivo sobre la dirección de la ruta de R
+    rx, ry = tr.X[e, r] - tr.X[s, r], tr.Y[e, r] - tr.Y[s, r]
+    rn = float(np.hypot(rx, ry))
+    if rn >= MIN_RECEIVER_DISP and len(defs) >= 2:
+        ux, uy = rx / rn, ry / rn
+        proj = (tr.X[e, defs] - tr.X[s, defs]) * ux + (tr.Y[e, defs] - tr.Y[s, defs]) * uy
+        ok = np.isfinite(proj)
         if ok.sum() >= 2:
             w = a0[ok]
             if w.sum() < 1e-6:
                 raw, note = 0.0, "Ningún defensor estuvo cerca del receptor."
             else:
-                raw, note = float(np.sum(w * delta[ok]) / w.sum() - np.mean(delta[ok])), None
+                raw, note = float(np.sum(w * proj[ok]) / w.sum() - np.mean(proj[ok])), None
             out["arrastre"] = {"raw": raw, "norm": float(np.clip(raw / COMPONENTS["arrastre"]["ref"], 0, 1)),
                                **({"note": note} if note else {})}
-    out.setdefault("arrastre", {"raw": None, "norm": None, "note": "Sin zona de referencia o defensores suficientes."})
+    out.setdefault("arrastre", {"raw": None, "norm": None,
+                                "note": f"El receptor se desplazó menos de {MIN_RECEIVER_DISP:.0f} yd: sin dirección de ruta."})
 
     # espacio para objetivo y compañeros
     if t_idx is not None:
@@ -195,13 +205,17 @@ def compute_dvi(tr: Tracks, players: list[Player]) -> dict[str, Any]:
         "window": {"start_frame": int(tr.frames[s0]), "end_frame": int(tr.frames[e]),
                    "throw_frame": int(tr.frames[tr.throw_idx]) if tr.throw_idx is not None else None,
                    "throw_source": tr.throw_source, "dt_s": tr.dt, "dt_source": tr.dt_source,
-                   "arrival_frame": int(tr.frames[tr.arrival_idx]) if tr.arrival_idx is not None else None},
+                   "arrival_frame": int(tr.frames[tr.arrival_idx]) if tr.arrival_idx is not None else None,
+                   "start_source": tr.start_source},
         "parameters": {"sigma_yd": SIGMA, "min_frames": MIN_FRAMES},
         "target_id": target.id if target else None, "receivers": [], "warnings": [],
     }
     if target is None or tr.throw_idx is None:
         result["reason"] = ("No hay receptor objetivo identificado." if target is None else
                             "No se identificó el lanzamiento (jugada sin pase, sack o scramble).")
+        return result
+    if tr.start_source != "evento de snap":
+        result["reason"] = "No hay evento de snap: no se puede delimitar la ventana de análisis."
         return result
     if e - s0 + 1 < MIN_FRAMES:
         result["reason"] = "Ventana temporal demasiado corta."
@@ -214,12 +228,14 @@ def compute_dvi(tr: Tracks, players: list[Player]) -> dict[str, Any]:
         return result
     if target is None:
         result["warnings"].append("Sin receptor objetivo: no se calculan los componentes de espacio para el objetivo ni el arrastre.")
-    if tr.throw_idx is None:
-        result["warnings"].append("No se identificó el momento del lanzamiento; la ventana llega al último cuadro.")
+    if result["target_inferred"]:
+        result["warnings"].append("El receptor objetivo es una INFERENCIA (nombre en la descripción de la jugada), no un dato oficial.")
 
     zone, zone_src = _zone(tr, t_idx, e)
     result["zone"] = {"x": zone[0], "y": zone[1]} if zone else None
-    result["zone_source"] = zone_src
+    result["zone_source"] = zone_src + " · solo visualización: NO entra al cálculo del DVI"
+    result["target_inferred"] = "inferido" in target.basis
+    result["target_basis"] = target.basis
 
     for rp in recvs:
         r = tr.col(rp.id)
@@ -230,12 +246,12 @@ def compute_dvi(tr: Tracks, players: list[Player]) -> dict[str, Any]:
             continue
         s = s0 + int(valid[0])
         others = [tr.col(p.id) for p in recvs if p.id != rp.id]
-        comps = _components_at(tr, r, t_idx, defs, others, s, e, zone)
+        comps = _components_at(tr, r, t_idx, defs, others, s, e)
         dvi, cover = _combine(comps)
 
         series = []
         for ee in range(s + MIN_FRAMES - 1, e + 1):
-            c = _components_at(tr, r, t_idx, defs, others, s, ee, zone)
+            c = _components_at(tr, r, t_idx, defs, others, s, ee)
             v, _ = _combine(c)
             series.append({"frame": int(tr.frames[ee]), "t_s": float(tr.t[ee] - tr.t[s]), "dvi": v,
                            **{k: c[k]["norm"] for k in COMPONENTS}})

@@ -25,7 +25,13 @@ export default function DviPage({ dvi, loading, error, selected, setSelected }: 
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-black text-white">Análisis DVI <span className="ml-2 rounded bg-amber-400/20 px-2 py-0.5 align-middle text-xs font-semibold text-amber-200">EXPERIMENTAL</span></h2>
+      <Notice kind="warn">Pesos, saturaciones y σ son criterio del equipo: <strong>no están calibrados</strong> ni validados contra resultados reales.</Notice>
       {dvi.warnings.map((w) => <Notice key={w} kind="warn">{w}</Notice>)}
+      {dvi.local_summary && (
+        <Card title="Resumen automático (calculado, sin IA)">
+          <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{dvi.local_summary}</div>
+        </Card>
+      )}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Comparación entre receptores no objetivo" className="lg:col-span-1">
           <div style={{ height: Math.max(180, compare.length * 44) }}>
@@ -126,6 +132,7 @@ export default function DviPage({ dvi, loading, error, selected, setSelected }: 
           <ul className="space-y-1 text-xs text-slate-300">
             <li>Cuadros {dvi.window.start_frame} → {dvi.window.end_frame}; lanzamiento: {dvi.window.throw_frame ?? 'no identificado'}{dvi.window.throw_source ? ` (${dvi.window.throw_source})` : ''}.</li>
             <li>Intervalo: {fmt(dvi.window.dt_s, 2)} s ({dvi.window.dt_source}).</li>
+            <li>Inicio de ventana: {dvi.window.start_source ?? '—'}.</li>
             <li>Zona de referencia: {dvi.zone_source}.</li>
           </ul>
         </Card>
@@ -147,6 +154,8 @@ export default function DviPage({ dvi, loading, error, selected, setSelected }: 
                 <div className="mt-1 text-xs text-amber-200">Limitación: {c.limitation}</div>
               </div>
             ))}
+            <p><strong>Calibración:</strong> {meth.data.calibracion}</p>
+            <p><strong>Observado vs. inferido:</strong> {meth.data.observado_vs_inferido}</p>
             <p><strong>Pesos:</strong> {meth.data.pesos}</p>
             <p><strong>Doble conteo:</strong> {meth.data.doble_conteo}</p>
             <p><strong>Componentes no calculables:</strong> {meth.data.no_calculable}</p>
